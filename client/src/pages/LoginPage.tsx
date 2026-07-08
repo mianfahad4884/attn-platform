@@ -4,22 +4,27 @@ import { Card } from '../components/ui/Card';
 import { Input } from '../components/ui/Input';
 import { Button } from '../components/ui/Button';
 import { useAuthStore } from '../store/authStore';
+import { useUIStore } from '../store/uiStore';
 
 export function LoginPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const { login, error } = useAuthStore();
+  const addToast = useUIStore((s) => s.addToast);
   const navigate = useNavigate();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsSubmitting(true);
-    await login(email, password);
-    setIsSubmitting(false);
-
-    if (useAuthStore.getState().isAuthenticated) {
+    try {
+      await login(email, password);
+      addToast('Authenticated successfully.', 'success');
       navigate('/dashboard');
+    } catch (err) {
+      // Error is handled by the auth store
+    } finally {
+      setIsSubmitting(false);
     }
   };
 

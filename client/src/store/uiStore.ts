@@ -1,44 +1,39 @@
 import { create } from 'zustand';
 
-interface Notification {
+export interface Toast {
   id: string;
   message: string;
-  type: 'info' | 'success' | 'error';
-  createdAt: number;
+  type?: 'default' | 'success' | 'error';
 }
 
 interface UIState {
   sidebarOpen: boolean;
-  notifications: Notification[];
-  toggleSidebar: () => void;
   setSidebarOpen: (open: boolean) => void;
-  addNotification: (message: string, type?: Notification['type']) => void;
-  dismissNotification: (id: string) => void;
+  toggleSidebar: () => void;
+  toasts: Toast[];
+  addToast: (message: string, type?: 'default' | 'success' | 'error') => void;
+  removeToast: (id: string) => void;
 }
 
 export const useUIStore = create<UIState>((set) => ({
   sidebarOpen: false,
-  notifications: [],
-
-  toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
-
-  setSidebarOpen: (open: boolean) => set({ sidebarOpen: open }),
-
-  addNotification: (message: string, type: Notification['type'] = 'info') => {
-    const id = 'notif_' + Date.now();
-    set((s) => ({
-      notifications: [...s.notifications, { id, message, type, createdAt: Date.now() }],
+  setSidebarOpen: (open) => set({ sidebarOpen: open }),
+  toggleSidebar: () => set((state) => ({ sidebarOpen: !state.sidebarOpen })),
+  toasts: [],
+  addToast: (message, type = 'default') => {
+    const id = Math.random().toString(36).substring(2, 9);
+    set((state) => ({
+      toasts: [...state.toasts, { id, message, type }],
     }));
-    // Auto-dismiss after 4 seconds
+    // Auto-dismiss after 3 seconds
     setTimeout(() => {
-      set((s) => ({
-        notifications: s.notifications.filter((n) => n.id !== id),
+      set((state) => ({
+        toasts: state.toasts.filter((t) => t.id !== id),
       }));
-    }, 4000);
+    }, 3000);
   },
-
-  dismissNotification: (id: string) =>
-    set((s) => ({
-      notifications: s.notifications.filter((n) => n.id !== id),
+  removeToast: (id) =>
+    set((state) => ({
+      toasts: state.toasts.filter((t) => t.id !== id),
     })),
 }));

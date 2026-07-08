@@ -8,11 +8,14 @@ import { useAuthStore } from '../store/authStore';
 import { useBalanceStore } from '../store/balanceStore';
 import { formatATTNComma, formatATTN, formatDateTime } from '../utils/format';
 import type { LedgerEntry } from '../types';
+import { DetailModal } from '../components/ui/DetailModal';
+import { useState } from 'react';
 
 export function DashboardPage() {
   const navigate = useNavigate();
   const user = useAuthStore((s) => s.user);
   const { balance, ledger } = useBalanceStore();
+  const [selectedTx, setSelectedTx] = useState<LedgerEntry | null>(null);
 
   const recentLedger = ledger.slice(0, 10);
 
@@ -117,8 +120,10 @@ export function DashboardPage() {
             Recent Activity
           </span>
         </div>
-        <Table columns={ledgerColumns} data={recentLedger} />
+        <Table columns={ledgerColumns} data={recentLedger} onRowClick={(row) => setSelectedTx(row)} />
       </Card>
+
+      <DetailModal data={selectedTx} onClose={() => setSelectedTx(null)} />
     </Shell>
   );
 }

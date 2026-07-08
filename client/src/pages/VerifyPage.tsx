@@ -6,6 +6,7 @@ import { ProgressRing } from '../components/ui/ProgressRing';
 import { useAuthStore } from '../store/authStore';
 import { useBalanceStore } from '../store/balanceStore';
 import { formatATTN } from '../utils/format';
+import { useUIStore } from '../store/uiStore';
 
 type VerifyState = 'idle' | 'verifying' | 'completed' | 'failed';
 
@@ -17,6 +18,7 @@ export function VerifyPage() {
   const intervalRef = useRef<number | null>(null);
   const user = useAuthStore((s) => s.user);
   const addCredit = useBalanceStore((s) => s.addCredit);
+  const addToast = useUIStore((s) => s.addToast);
 
   const baseReward = 250000; // 25.0000 ATTN
   const multiplier = user?.multiplier || 1.0;
@@ -46,6 +48,7 @@ export function VerifyPage() {
           if (Math.random() > 0.05) {
             setState('completed');
             addCredit(netReward, 'VERIFICATION', `Verification reward (${multiplier}× tier bonus)`);
+            addToast('Verification successful. ATTN credited.', 'success');
           } else {
             setState('failed');
           }
@@ -80,12 +83,24 @@ export function VerifyPage() {
         )}
 
         {state === 'verifying' && (
-          <Card className="flex flex-col items-center py-10">
-            <ProgressRing progress={progress} size={120} strokeWidth={3}>
-              <span className="font-tabular text-2xl text-text-primary">{countdown}</span>
-            </ProgressRing>
-            <p className="text-sm text-text-secondary mt-6">Verifying attention…</p>
-          </Card>
+          <div className="space-y-6">
+            <Card className="flex flex-col items-center py-10">
+              <ProgressRing progress={progress} size={120} strokeWidth={3}>
+                <span className="font-tabular text-2xl text-text-primary">{countdown}</span>
+              </ProgressRing>
+              <p className="text-sm text-text-secondary mt-6">Verifying attention…</p>
+            </Card>
+
+            {/* Verification Placeholder (Mock Ad) */}
+            <Card className="flex flex-col items-center justify-center min-h-[200px] border-dashed border-2 border-divider bg-bg">
+              <span className="text-xs uppercase tracking-widest text-text-secondary font-mono">
+                Simulated Ad Content — 30s
+              </span>
+              <span className="text-sm text-text-secondary mt-2 opacity-50">
+                (Placeholder for attention verification media)
+              </span>
+            </Card>
+          </div>
         )}
 
         {state === 'completed' && (

@@ -8,6 +8,8 @@ import { Table, type Column } from '../components/ui/Table';
 import { useBalanceStore } from '../store/balanceStore';
 import { formatATTN, formatATTNComma, formatDateTime } from '../utils/format';
 import type { Withdrawal } from '../types';
+import { DetailModal } from '../components/ui/DetailModal';
+import { useUIStore } from '../store/uiStore';
 
 const FEE_PERCENTAGE = 5;
 const WITHDRAWAL_MINIMUM = 5000000; // 500.0000 ATTN
@@ -16,6 +18,8 @@ export function WithdrawPage() {
   const { balance, withdrawals, requestWithdrawal, isLoading } = useBalanceStore();
   const [amountStr, setAmountStr] = useState('');
   const [method, setMethod] = useState<'STRIPE' | 'CRYPTO'>('STRIPE');
+  const [selectedTx, setSelectedTx] = useState<Withdrawal | null>(null);
+  const addToast = useUIStore((s) => s.addToast);
 
   const amountMinorUnits = useMemo(() => {
     const parsed = parseFloat(amountStr);
@@ -35,6 +39,7 @@ export function WithdrawPage() {
     if (!canSubmit) return;
     await requestWithdrawal(amountMinorUnits, method);
     setAmountStr('');
+    addToast('Withdrawal request submitted successfully.', 'success');
   };
 
   const withdrawalColumns: Column<Withdrawal>[] = [
@@ -147,7 +152,7 @@ export function WithdrawPage() {
           </div>
 
           {/* Receipt breakdown */}
-          {amountMinorUnits > 0 && (
+          {amountMinorUnits > 0 ? (
             <Card>
               <div className="space-y-2 font-tabular text-sm">
                 <div className="flex justify-between">
@@ -165,7 +170,7 @@ export function WithdrawPage() {
                 </div>
               </div>
             </Card>
-          )}
+          ) : null}
 
           <Button
             onClick={handleSubmit}
@@ -184,10 +189,12 @@ export function WithdrawPage() {
                 Withdrawal History
               </span>
             </div>
-            <Table columns={withdrawalColumns} data={withdrawals} />
+            <Table columns={withdrawalColumns} data={withdrawals} onRowClick={(row) => setSelectedTx(row)} />
           </Card>
         </div>
       </div>
+      
+      <DetailModal data={selectedTx} onClose={() => setSelectedTx(null)} />
     </Shell>
   );
 }

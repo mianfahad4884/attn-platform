@@ -32,27 +32,27 @@ function ReferralTreeNode({ node, isRoot = false }: { node: ReferralNode; isRoot
           {/* Vertical connector from parent */}
           <div className="w-px h-4 bg-divider" />
 
-          {/* Horizontal connector bar */}
-          {node.children.length > 1 && (
-            <div className="relative w-full flex justify-center">
-              <div
-                className="h-px bg-divider absolute top-0"
-                style={{
-                  left: `${100 / (node.children.length * 2)}%`,
-                  right: `${100 / (node.children.length * 2)}%`,
-                }}
-              />
-            </div>
-          )}
+          <div className="flex justify-center">
+            {node.children.map((child, index) => {
+              const isFirst = index === 0;
+              const isLast = index === node.children.length - 1;
+              const isOnly = node.children.length === 1;
 
-          <div className="flex gap-6">
-            {node.children.map((child) => (
-              <div key={child.id} className="flex flex-col items-center">
-                {/* Vertical connector to child */}
-                <div className="w-px h-4 bg-divider" />
-                <ReferralTreeNode node={child} />
-              </div>
-            ))}
+              return (
+                <div key={child.id} className="flex flex-col items-center relative px-3">
+                  {/* Horizontal line segments */}
+                  {!isOnly && (
+                    <>
+                      <div className={`absolute top-0 left-0 w-1/2 h-px ${isFirst ? 'bg-transparent' : 'bg-divider'}`} />
+                      <div className={`absolute top-0 right-0 w-1/2 h-px ${isLast ? 'bg-transparent' : 'bg-divider'}`} />
+                    </>
+                  )}
+                  {/* Vertical connector to child */}
+                  <div className="w-px h-4 bg-divider" />
+                  <ReferralTreeNode node={child} />
+                </div>
+              );
+            })}
           </div>
         </>
       )}

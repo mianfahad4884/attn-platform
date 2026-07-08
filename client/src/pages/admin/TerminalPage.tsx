@@ -19,6 +19,7 @@ import {
   truncateEmail,
 } from '../../utils/format';
 import type { User, AuditLogEntry, SystemConfig } from '../../types';
+import { DetailModal } from '../../components/ui/DetailModal';
 
 type Tab = 'users' | 'audit' | 'controls';
 
@@ -30,7 +31,7 @@ export function TerminalPage() {
   } | null>(null);
   const [actionReason, setActionReason] = useState('');
   const [adjustAmount, setAdjustAmount] = useState('');
-  const [expandedAudit, setExpandedAudit] = useState<string | null>(null);
+  const [selectedAuditLog, setSelectedAuditLog] = useState<any | null>(null);
 
   // Controls state
   const [config, setConfig] = useState<SystemConfig>(mockSystemConfig);
@@ -170,10 +171,19 @@ export function TerminalPage() {
           className="text-xs text-accent hover:underline cursor-pointer"
           onClick={(e) => {
             e.stopPropagation();
-            setExpandedAudit(expandedAudit === row.id ? null : row.id);
+            setSelectedAuditLog({
+              id: row.id,
+              createdAt: row.createdAt,
+              type: 'AUDIT_LOG',
+              source: 'ADMIN',
+              description: row.reason,
+              amount: 0,
+              balanceAfter: 0,
+              ...row.details
+            });
           }}
         >
-          {expandedAudit === row.id ? 'hide' : 'view'}
+          view
         </button>
       ),
     },
@@ -217,18 +227,6 @@ export function TerminalPage() {
       {activeTab === 'audit' && (
         <Card className="p-0">
           <Table columns={auditColumns} data={mockAuditLog} />
-          {/* Expanded audit details */}
-          {expandedAudit && (
-            <div className="px-5 py-3 border-t border-divider bg-bg">
-              <pre className="font-tabular text-xs text-text-secondary whitespace-pre-wrap">
-                {JSON.stringify(
-                  mockAuditLog.find((e) => e.id === expandedAudit)?.details,
-                  null,
-                  2
-                )}
-              </pre>
-            </div>
-          )}
         </Card>
       )}
 
@@ -254,14 +252,15 @@ export function TerminalPage() {
                 className="font-tabular"
               />
               <Input
-                label="Withdrawal Minimum (minor units)"
+                label="Withdrawal Minimum (ATTN)"
                 type="number"
+                step="0.0001"
                 min="0"
-                value={String(config.withdrawalMinimum)}
+                value={String(config.withdrawalMinimum / 10000)}
                 onChange={(e) =>
                   setConfig({
                     ...config,
-                    withdrawalMinimum: parseInt(e.target.value) || 0,
+                    withdrawalMinimum: Math.floor((parseFloat(e.target.value) || 0) * 10000),
                   })
                 }
                 className="font-tabular"
@@ -279,16 +278,16 @@ export function TerminalPage() {
             </div>
             <div className="flex items-center gap-3 mb-4">
               <button
-                className={`relative w-10 h-5 rounded-[2px] cursor-pointer ${
-                  config.emergencyPause ? 'bg-negative' : 'bg-divider'
+                className={`relative w-10 h-5 border cursor-pointer transition-colors ${
+                  config.emergencyPause ? 'bg-accent border-accent' : 'bg-transparent border-divider'
                 }`}
                 onClick={() =>
                   setConfig({ ...config, emergencyPause: !config.emergencyPause })
                 }
               >
                 <div
-                  className={`absolute top-0.5 w-4 h-4 bg-text-primary rounded-[1px] transition-transform ${
-                    config.emergencyPause ? 'translate-x-5' : 'translate-x-0.5'
+                  className={`absolute top-0 w-4 h-[18px] transition-transform ${
+                    config.emergencyPause ? 'bg-text-primary translate-x-5' : 'bg-divider translate-x-0'
                   }`}
                 />
               </button>
@@ -404,6 +403,8 @@ export function TerminalPage() {
           </Card>
         </div>
       )}
+      
+      <DetailModal data={selectedAuditLog} onClose={() => setSelectedAuditLog(null)} />
     </Shell>
   );
 }
