@@ -1,7 +1,9 @@
 import { Router } from 'express';
 import { authenticate } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
-import { users } from '../models/store.js';
+import { db } from '../db/index.js';
+import { users } from '../db/schema.js';
+import { eq } from 'drizzle-orm';
 import * as verificationService from '../services/verification.js';
 import { isSystemPaused } from '../services/payout.js';
 
@@ -15,12 +17,12 @@ router.use(authenticate);
 router.post('/start', rateLimit(10), async (req, res) => {
   try {
     // Check system pause
-    if (isSystemPaused()) {
+    if (await isSystemPaused()) {
       res.status(503).json({ error: 'System is currently paused — verifications are temporarily unavailable' });
       return;
     }
 
-    const user = users.get(req.user!.userId);
+    const [user] = await db.select().from(users).where(eq(users.id, req.user!.userId));
     if (!user) {
       res.status(404).json({ error: 'User not found' });
       return;
@@ -31,7 +33,7 @@ router.post('/start', rateLimit(10), async (req, res) => {
       return;
     }
 
-    const job = verificationService.startVerification(user.id);
+    const job = await verificationService.startVerification(user.id);
     res.status(201).json({ job });
   } catch (err) {
     console.error('Verify start error:', err);
@@ -41,9 +43,9 @@ router.post('/start', rateLimit(10), async (req, res) => {
 
 // ── GET /api/verify/status/:jobId ────────────────────────────────────────────
 
-router.get('/status/:jobId', (req, res) => {
+router.get('/status/:jobId', async (req, res) => {
   try {
-    const job = verificationService.getJobStatus(req.params.jobId);
+    const job = await verificationService.getJobStatus(req.params.jobId);
     if (!job) {
       res.status(404).json({ error: 'Job not found' });
       return;

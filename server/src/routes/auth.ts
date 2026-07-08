@@ -2,7 +2,10 @@ import { Router } from 'express';
 import { z } from 'zod';
 import argon2 from 'argon2';
 import jwt from 'jsonwebtoken';
-import { users, generateId, generateReferralCode } from '../models/store.js';
+import { db } from '../db/index.js';
+import { users } from '../db/schema.js';
+import { eq } from 'drizzle-orm';
+import { generateId, generateReferralCode } from '../models/store.js';
 import { authenticate } from '../middleware/auth.js';
 import * as ledger from '../services/ledger.js';
 import { JWT_SECRET, sanitizeUser } from '../utils/index.js';
@@ -46,20 +49,16 @@ router.post('/register', async (req, res) => {
     const { email, password, referralCode } = parsed.data;
 
     // Check email not taken
-    for (const u of users.values()) {
-      if (u.email.toLowerCase() === email.toLowerCase()) {
-        res.status(409).json({ error: 'Email already registered' });
-        return;
-      }
+    const [existing] = await db.select().from(users).where(eq(users.email, email.toLowerCase()));
+    if (existing) {
+      res.status(409).json({ error: 'Email already registered' });
+      return;
     }
 
     // IP-based account cap (max 2 accounts per IP)
     const clientIp = req.ip || 'unknown';
-    let ipCount = 0;
-    for (const u of users.values()) {
-      if (u.ipAddress === clientIp) ipCount++;
-    }
-    if (ipCount >= 2) {
+    const ipMatches = await db.select().from(users).where(eq(users.ipAddress, clientIp));
+    if (ipMatches.length >= 2) {
       res.status(403).json({ error: 'Account limit reached for this IP address' });
       return;
     }
@@ -70,20 +69,17 @@ router.post('/register', async (req, res) => {
     // Resolve referrer
     let referredBy: string | null = null;
     if (referralCode) {
-      for (const u of users.values()) {
-        if (u.referralCode === referralCode) {
-          referredBy = u.id;
-          break;
-        }
-      }
-      if (!referredBy) {
+      const [referrer] = await db.select().from(users).where(eq(users.referralCode, referralCode));
+      if (referrer) {
+        referredBy = referrer.id;
+      } else {
         res.status(400).json({ error: 'Invalid referral code' });
         return;
       }
     }
 
     const now = new Date();
-    const user: User = {
+    const newUser = {
       id: generateId(),
       email: email.toLowerCase(),
       passwordHash,
@@ -98,10 +94,10 @@ router.post('/register', async (req, res) => {
       updatedAt: now,
     };
 
-    users.set(user.id, user);
+    const [user] = await db.insert(users).values(newUser).returning();
 
-    const accessToken = signAccessToken(user);
-    const refreshToken = signRefreshToken(user);
+    const accessToken = signAccessToken(user as User);
+    const refreshToken = signRefreshToken(user as User);
 
     // Set refresh token in httpOnly cookie
     res.cookie('refreshToken', refreshToken, {
@@ -112,7 +108,7 @@ router.post('/register', async (req, res) => {
     });
 
     res.status(201).json({
-      user: sanitizeUser(user),
+      user: sanitizeUser(user as User),
       accessToken,
       refreshToken,
     });
@@ -135,14 +131,7 @@ router.post('/login', async (req, res) => {
     const { email, password } = parsed.data;
 
     // Find user by email
-    let user: User | undefined;
-    for (const u of users.values()) {
-      if (u.email.toLowerCase() === email.toLowerCase()) {
-        user = u;
-        break;
-      }
-    }
-
+    const [user] = await db.select().from(users).where(eq(users.email, email.toLowerCase()));
     if (!user) {
       res.status(401).json({ error: 'Invalid email or password' });
       return;
@@ -165,12 +154,15 @@ router.post('/login', async (req, res) => {
       return;
     }
 
-    const accessToken = signAccessToken(user);
-    const refreshToken = signRefreshToken(user);
+    const accessToken = signAccessToken(user as User);
+    const refreshToken = signRefreshToken(user as User);
 
     // Update IP on login
-    user.ipAddress = req.ip || user.ipAddress;
-    user.updatedAt = new Date();
+    const clientIp = req.ip || user.ipAddress;
+    const [updatedUser] = await db.update(users)
+      .set({ ipAddress: clientIp, updatedAt: new Date() })
+      .where(eq(users.id, user.id))
+      .returning();
 
     res.cookie('refreshToken', refreshToken, {
       httpOnly: true,
@@ -180,7 +172,7 @@ router.post('/login', async (req, res) => {
     });
 
     res.json({
-      user: sanitizeUser(user),
+      user: sanitizeUser(updatedUser as User),
       accessToken,
     });
   } catch (err) {
@@ -191,7 +183,7 @@ router.post('/login', async (req, res) => {
 
 // ── POST /api/auth/refresh ───────────────────────────────────────────────────
 
-router.post('/refresh', (req, res) => {
+router.post('/refresh', async (req, res) => {
   try {
     const token = req.cookies?.refreshToken as string | undefined;
     if (!token) {
@@ -205,13 +197,13 @@ router.post('/refresh', (req, res) => {
       return;
     }
 
-    const user = users.get(decoded.userId);
+    const [user] = await db.select().from(users).where(eq(users.id, decoded.userId));
     if (!user) {
       res.status(401).json({ error: 'User not found' });
       return;
     }
 
-    const accessToken = signAccessToken(user);
+    const accessToken = signAccessToken(user as User);
     res.json({ accessToken });
   } catch {
     res.status(401).json({ error: 'Invalid or expired refresh token' });
@@ -220,17 +212,17 @@ router.post('/refresh', (req, res) => {
 
 // ── GET /api/auth/me ─────────────────────────────────────────────────────────
 
-router.get('/me', authenticate, (req, res) => {
+router.get('/me', authenticate, async (req, res) => {
   try {
-    const user = users.get(req.user!.userId);
+    const [user] = await db.select().from(users).where(eq(users.id, req.user!.userId));
     if (!user) {
       res.status(404).json({ error: 'User not found' });
       return;
     }
 
-    const balance = ledger.getBalance(user.id);
+    const balance = await ledger.getBalance(user.id);
     res.json({
-      user: sanitizeUser(user),
+      user: sanitizeUser(user as User),
       balance,
     });
   } catch (err) {

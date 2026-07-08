@@ -1,7 +1,9 @@
 import type { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import { JWT_SECRET } from '../utils/index.js';
-import { users } from '../models/store.js';
+import { db } from '../db/index.js';
+import { users } from '../db/schema.js';
+import { eq } from 'drizzle-orm';
 
 // ── Extend Express Request globally ──────────────────────────────────────────
 
@@ -19,7 +21,7 @@ declare global {
  * Extracts token from Authorization header (Bearer) or cookies.
  * Attaches decoded user to req.user and captures IP to req.clientIp.
  */
-export function authenticate(req: Request, res: Response, next: NextFunction): void {
+export async function authenticate(req: Request, res: Response, next: NextFunction): Promise<void> {
   // Always capture IP server-side
   req.clientIp = req.ip || 'unknown';
 
@@ -44,7 +46,7 @@ export function authenticate(req: Request, res: Response, next: NextFunction): v
     const decoded = jwt.verify(token, JWT_SECRET) as { userId: string; role: string };
     
     // Guard: check actual user status in store
-    const user = users.get(decoded.userId);
+    const [user] = await db.select().from(users).where(eq(users.id, decoded.userId));
     if (!user || user.status === 'BANNED' || user.status === 'SUSPENDED') {
       res.status(403).json({ error: 'Account is banned or suspended' });
       return;
@@ -52,7 +54,7 @@ export function authenticate(req: Request, res: Response, next: NextFunction): v
 
     req.user = { userId: decoded.userId, role: decoded.role };
     next();
-  } catch {
+  } catch (err) {
     res.status(401).json({ error: 'Invalid or expired token' });
   }
 }

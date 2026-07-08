@@ -2,11 +2,11 @@ export interface User {
   id: string;
   email: string;
   passwordHash: string;
-  role: 'USER' | 'SUPER_ADMIN';
-  tier: 1 | 2 | 3;
+  role: string;
+  tier: number;
   deviceHash: string | null;
   ipAddress: string | null;
-  status: 'ACTIVE' | 'SUSPENDED' | 'BANNED';
+  status: string;
   referredBy: string | null;
   referralCode: string;
   createdAt: Date;

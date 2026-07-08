@@ -1,19 +1,17 @@
 import { Decimal } from 'decimal.js';
-import type { LedgerEntry } from '../types/index.js';
-import {
-  ledgerEntries,
-  generateId,
-  systemConfig,
-} from '../models/store.js';
+import { db } from '../db/index.js';
+import { ledger, systemConfig } from '../db/schema.js';
+import { eq, desc } from 'drizzle-orm';
+import { generateId } from '../models/store.js';
 
 /**
  * Compute the current balance for a user by summing all their ledger entries.
  * CREDITs and ADJUSTMENTs are positive; DEBITs and FEEs are negative.
  */
-export function getBalance(userId: string): number {
+export async function getBalance(userId: string): Promise<number> {
+  const entries = await db.select().from(ledger).where(eq(ledger.userId, userId));
   let sum = new Decimal(0);
-  for (const entry of ledgerEntries.values()) {
-    if (entry.userId !== userId) continue;
+  for (const entry of entries) {
     if (entry.type === 'CREDIT' || entry.type === 'ADJUSTMENT') {
       sum = sum.plus(entry.amount);
     } else {
@@ -26,17 +24,17 @@ export function getBalance(userId: string): number {
 /**
  * Append a CREDIT entry to the ledger.
  */
-export function creditUser(
+export async function creditUser(
   userId: string,
   amount: number,
-  source: LedgerEntry['source'],
+  source: string,
   referenceId: string | null,
   description: string,
-): LedgerEntry {
-  const currentBalance = getBalance(userId);
+) {
+  const currentBalance = await getBalance(userId);
   const newBalance = new Decimal(currentBalance).plus(amount).toNumber();
 
-  const entry: LedgerEntry = {
+  const [entry] = await db.insert(ledger).values({
     id: generateId(),
     userId,
     type: 'CREDIT',
@@ -46,30 +44,29 @@ export function creditUser(
     referenceId,
     description,
     createdAt: new Date(),
-  };
+  }).returning();
 
-  ledgerEntries.set(entry.id, entry);
   return entry;
 }
 
 /**
  * Append a DEBIT entry to the ledger. Throws if insufficient balance.
  */
-export function debitUser(
+export async function debitUser(
   userId: string,
   amount: number,
-  source: LedgerEntry['source'],
+  source: string,
   referenceId: string | null,
   description: string,
-): LedgerEntry {
-  const currentBalance = getBalance(userId);
+) {
+  const currentBalance = await getBalance(userId);
   if (currentBalance < amount) {
     throw new Error('Insufficient balance');
   }
 
   const newBalance = new Decimal(currentBalance).minus(amount).toNumber();
 
-  const entry: LedgerEntry = {
+  const [entry] = await db.insert(ledger).values({
     id: generateId(),
     userId,
     type: 'DEBIT',
@@ -79,26 +76,25 @@ export function debitUser(
     referenceId,
     description,
     createdAt: new Date(),
-  };
+  }).returning();
 
-  ledgerEntries.set(entry.id, entry);
   return entry;
 }
 
 /**
  * Append a FEE entry to the ledger.
  */
-export function recordFee(
+export async function recordFee(
   userId: string,
   amount: number,
-  source: LedgerEntry['source'],
+  source: string,
   referenceId: string | null,
   description: string,
-): LedgerEntry {
-  const currentBalance = getBalance(userId);
+) {
+  const currentBalance = await getBalance(userId);
   const newBalance = new Decimal(currentBalance).minus(amount).toNumber();
 
-  const entry: LedgerEntry = {
+  const [entry] = await db.insert(ledger).values({
     id: generateId(),
     userId,
     type: 'FEE',
@@ -108,27 +104,26 @@ export function recordFee(
     referenceId,
     description,
     createdAt: new Date(),
-  };
+  }).returning();
 
-  ledgerEntries.set(entry.id, entry);
   return entry;
 }
 
 /**
  * Append an ADJUSTMENT entry (positive credit).
  */
-export function adjustBalance(
+export async function adjustBalance(
   userId: string,
   amount: number,
-  source: LedgerEntry['source'],
+  source: string,
   referenceId: string | null,
   description: string,
-): LedgerEntry {
-  const currentBalance = getBalance(userId);
+) {
+  const currentBalance = await getBalance(userId);
   // Adjustments can be positive (credit-like) or negative; for negative we use debit.
   const newBalance = new Decimal(currentBalance).plus(amount).toNumber();
 
-  const entry: LedgerEntry = {
+  const [entry] = await db.insert(ledger).values({
     id: generateId(),
     userId,
     type: 'ADJUSTMENT',
@@ -138,19 +133,23 @@ export function adjustBalance(
     referenceId,
     description,
     createdAt: new Date(),
-  };
+  }).returning();
 
-  ledgerEntries.set(entry.id, entry);
   return entry;
 }
 
 /**
  * Calculate withdrawal fee and net payout using decimal.js to avoid float drift.
  */
-export function calculateWithdrawalFee(amount: number): { fee: number; netPayout: number } {
+export async function calculateWithdrawalFee(amount: number): Promise<{ fee: number; netPayout: number }> {
+  let [config] = await db.select().from(systemConfig).limit(1);
+  if (!config) {
+    config = { feePercentage: 5, withdrawalMinimum: 5000000, emergencyPause: false, pauseReason: null, pauseExpiresAt: null, updatedAt: new Date(), id: 1 };
+  }
+
   const amountDec = new Decimal(amount);
   const feeDec = amountDec
-    .times(new Decimal(systemConfig.feePercentage))
+    .times(new Decimal(config.feePercentage))
     .dividedBy(100)
     .floor(); // always integer minor units
   const netPayout = amountDec.minus(feeDec).toNumber();
@@ -160,12 +159,6 @@ export function calculateWithdrawalFee(amount: number): { fee: number; netPayout
 /**
  * Return all ledger entries for a user, sorted by date descending.
  */
-export function getUserLedger(userId: string): LedgerEntry[] {
-  const entries: LedgerEntry[] = [];
-  for (const entry of ledgerEntries.values()) {
-    if (entry.userId === userId) {
-      entries.push(entry);
-    }
-  }
-  return entries.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+export async function getUserLedger(userId: string) {
+  return await db.select().from(ledger).where(eq(ledger.userId, userId)).orderBy(desc(ledger.createdAt));
 }

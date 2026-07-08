@@ -1,6 +1,5 @@
 import { create } from 'zustand';
 import type { User } from '../types';
-import { mockCurrentUser } from '../services/mockData';
 
 interface AuthState {
   user: User | null;
@@ -11,74 +10,100 @@ interface AuthState {
   login: (email: string, password: string) => Promise<void>;
   register: (email: string, password: string, referralCode?: string) => Promise<void>;
   logout: () => void;
+  fetchMe: () => Promise<void>;
 }
 
-export const useAuthStore = create<AuthState>((set) => ({
+export const useAuthStore = create<AuthState>((set, get) => ({
   user: null,
-  token: null,
-  isAuthenticated: false,
+  token: localStorage.getItem('token') || null,
+  isAuthenticated: !!localStorage.getItem('token'),
   isAdmin: false,
   error: null,
 
-  login: async (email: string, _password: string) => {
-    // Simulate API delay
-    await new Promise((r) => setTimeout(r, 400));
+  fetchMe: async () => {
+    const { token } = get();
+    if (!token) return;
 
-    if (!email.includes('@')) {
-      set({ error: 'Invalid email address' });
-      return;
+    try {
+      const res = await fetch('/api/auth/me', {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+      if (res.ok) {
+        const user: User = await res.json();
+        set({
+          user,
+          isAuthenticated: true,
+          isAdmin: user.role === 'SUPER_ADMIN' || user.role === 'ADMIN',
+          error: null,
+        });
+      } else {
+        // Token might be invalid or expired
+        localStorage.removeItem('token');
+        set({ user: null, token: null, isAuthenticated: false, isAdmin: false });
+      }
+    } catch (err: any) {
+      console.error('fetchMe error', err);
     }
-
-    const user: User = {
-      ...mockCurrentUser,
-      email,
-    };
-
-    set({
-      user,
-      token: 'mock_jwt_token_' + Date.now(),
-      isAuthenticated: true,
-      isAdmin: user.role === 'SUPER_ADMIN',
-      error: null,
-    });
   },
 
-  register: async (email: string, password: string, _referralCode?: string) => {
-    await new Promise((r) => setTimeout(r, 600));
+  login: async (email: string, password: string) => {
+    try {
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password })
+      });
 
-    if (!email.includes('@')) {
-      set({ error: 'Invalid email address' });
-      return;
+      const data = await res.json();
+      if (!res.ok) {
+        set({ error: data.error || 'Login failed' });
+        return;
+      }
+
+      localStorage.setItem('token', data.token);
+      set({
+        user: data.user,
+        token: data.token,
+        isAuthenticated: true,
+        isAdmin: data.user.role === 'SUPER_ADMIN' || data.user.role === 'ADMIN',
+        error: null,
+      });
+    } catch (err: any) {
+      set({ error: err.message || 'Network error' });
     }
+  },
 
-    if (password.length < 6) {
-      set({ error: 'Password must be at least 6 characters' });
-      return;
+  register: async (email: string, password: string, referralCode?: string) => {
+    try {
+      const res = await fetch('/api/auth/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password, referralCode })
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        set({ error: data.error || 'Registration failed' });
+        return;
+      }
+
+      localStorage.setItem('token', data.token);
+      set({
+        user: data.user,
+        token: data.token,
+        isAuthenticated: true,
+        isAdmin: data.user.role === 'SUPER_ADMIN' || data.user.role === 'ADMIN',
+        error: null,
+      });
+    } catch (err: any) {
+      set({ error: err.message || 'Network error' });
     }
-
-    const user: User = {
-      id: 'usr_' + Math.random().toString(36).slice(2, 18),
-      email,
-      role: 'USER',
-      tier: 1,
-      tierLabel: 'NOVICE',
-      multiplier: 1.0,
-      status: 'ACTIVE',
-      referralCode: 'ATTN-' + Math.random().toString(36).slice(2, 8).toUpperCase(),
-      referredBy: _referralCode || null,
-      createdAt: new Date().toISOString(),
-    };
-
-    set({
-      user,
-      token: 'mock_jwt_token_' + Date.now(),
-      isAuthenticated: true,
-      isAdmin: false,
-      error: null,
-    });
   },
 
   logout: () => {
+    localStorage.removeItem('token');
     set({
       user: null,
       token: null,

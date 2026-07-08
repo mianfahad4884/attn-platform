@@ -1,25 +1,27 @@
-import type { Withdrawal } from '../types/index.js';
-import {
-  withdrawals,
-  users,
-  systemConfig,
-  generateId,
-} from '../models/store.js';
+import { db } from '../db/index.js';
+import { withdrawals, users, systemConfig } from '../db/schema.js';
+import { eq, desc } from 'drizzle-orm';
+import { generateId } from '../models/store.js';
 import * as ledger from './ledger.js';
 
 /**
  * Lazy emergency-pause check.
  * If pauseExpiresAt has passed, auto-unset the pause flag and return false.
  */
-export function isSystemPaused(): boolean {
-  if (!systemConfig.emergencyPause) return false;
+export async function isSystemPaused(): Promise<boolean> {
+  const [config] = await db.select().from(systemConfig).limit(1);
+  if (!config || !config.emergencyPause) return false;
 
   // If there's an expiry and it's in the past, auto-unset
-  if (systemConfig.pauseExpiresAt && systemConfig.pauseExpiresAt.getTime() <= Date.now()) {
-    systemConfig.emergencyPause = false;
-    systemConfig.pauseReason = null;
-    systemConfig.pauseExpiresAt = null;
-    systemConfig.updatedAt = new Date();
+  if (config.pauseExpiresAt && config.pauseExpiresAt.getTime() <= Date.now()) {
+    await db.update(systemConfig)
+      .set({
+        emergencyPause: false,
+        pauseReason: null,
+        pauseExpiresAt: null,
+        updatedAt: new Date()
+      })
+      .where(eq(systemConfig.id, 1));
     return false;
   }
 
@@ -32,39 +34,43 @@ export function isSystemPaused(): boolean {
  * Validates: user active, system not paused, amount >= minimum, amount <= balance.
  * Calculates fee with decimal.js. Creates withdrawal record, DEBIT + FEE ledger entries.
  */
-export function requestWithdrawal(
+export async function requestWithdrawal(
   userId: string,
   amount: number,
   method: 'STRIPE' | 'CRYPTO',
-): Withdrawal {
+) {
   // System pause check
-  if (isSystemPaused()) {
+  if (await isSystemPaused()) {
     throw new Error('System is currently paused for withdrawals');
   }
 
-  const user = users.get(userId);
+  const [user] = await db.select().from(users).where(eq(users.id, userId));
   if (!user) throw new Error('User not found');
   if (user.status !== 'ACTIVE') {
     throw new Error(`Account is ${user.status} — withdrawals are not allowed`);
   }
 
+  const [config] = await db.select().from(systemConfig).limit(1);
+  const minWithdrawal = config?.withdrawalMinimum ?? 5000000;
+  const feePercentage = config?.feePercentage ?? 5;
+
   // Amount validations
-  if (amount < systemConfig.withdrawalMinimum) {
+  if (amount < minWithdrawal) {
     throw new Error(
-      `Minimum withdrawal is ${systemConfig.withdrawalMinimum} minor units (${systemConfig.withdrawalMinimum / 10000} ATTN)`,
+      `Minimum withdrawal is ${minWithdrawal} minor units (${minWithdrawal / 10000} ATTN)`,
     );
   }
 
-  const balance = ledger.getBalance(userId);
+  const balance = await ledger.getBalance(userId);
   if (amount > balance) {
     throw new Error('Insufficient balance');
   }
 
   // Calculate fee
-  const { fee, netPayout } = ledger.calculateWithdrawalFee(amount);
+  const { fee, netPayout } = await ledger.calculateWithdrawalFee(amount);
 
   // Create withdrawal record
-  const withdrawal: Withdrawal = {
+  const [withdrawal] = await db.insert(withdrawals).values({
     id: generateId(),
     userId,
     amount,
@@ -73,12 +79,12 @@ export function requestWithdrawal(
     method,
     status: 'PENDING',
     createdAt: new Date(),
-  };
+  }).returning();
 
-  withdrawals.set(withdrawal.id, withdrawal);
+  if (!withdrawal) throw new Error('Failed to create withdrawal record');
 
   // Debit the net amount from user's balance
-  ledger.debitUser(
+  await ledger.debitUser(
     userId,
     netPayout,
     'WITHDRAWAL',
@@ -87,12 +93,12 @@ export function requestWithdrawal(
   );
 
   // Record fee as separate ledger entry
-  ledger.recordFee(
+  await ledger.recordFee(
     userId,
     fee,
     'WITHDRAWAL',
     withdrawal.id,
-    `Withdrawal fee (${systemConfig.feePercentage}%)`,
+    `Withdrawal fee (${feePercentage}%)`,
   );
 
   return withdrawal;
@@ -101,10 +107,6 @@ export function requestWithdrawal(
 /**
  * Get all withdrawals for a user, sorted by date descending.
  */
-export function getWithdrawals(userId: string): Withdrawal[] {
-  const result: Withdrawal[] = [];
-  for (const w of withdrawals.values()) {
-    if (w.userId === userId) result.push(w);
-  }
-  return result.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+export async function getWithdrawals(userId: string) {
+  return await db.select().from(withdrawals).where(eq(withdrawals.userId, userId)).orderBy(desc(withdrawals.createdAt));
 }

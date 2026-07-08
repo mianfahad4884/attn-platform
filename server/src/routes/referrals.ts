@@ -1,6 +1,8 @@
 import { Router } from 'express';
 import { authenticate } from '../middleware/auth.js';
-import { users } from '../models/store.js';
+import { db } from '../db/index.js';
+import { users } from '../db/schema.js';
+import { eq } from 'drizzle-orm';
 import * as referralService from '../services/referral.js';
 
 const router = Router();
@@ -10,10 +12,10 @@ router.use(authenticate);
 
 // ── GET /api/referrals/tree ──────────────────────────────────────────────────
 
-router.get('/tree', (req, res) => {
+router.get('/tree', async (req, res) => {
   try {
     const maxDepth = parseInt(req.query.maxDepth as string) || 3;
-    const tree = referralService.getReferralTree(req.user!.userId, maxDepth);
+    const tree = await referralService.getReferralTree(req.user!.userId, maxDepth);
 
     if (!tree) {
       res.status(404).json({ error: 'User not found' });
@@ -29,10 +31,10 @@ router.get('/tree', (req, res) => {
 
 // ── GET /api/referrals/stats ─────────────────────────────────────────────────
 
-router.get('/stats', (req, res) => {
+router.get('/stats', async (req, res) => {
   try {
-    const stats = referralService.getReferralStats(req.user!.userId);
-    const tierInfo = referralService.calculateTier(req.user!.userId);
+    const stats = await referralService.getReferralStats(req.user!.userId);
+    const tierInfo = await referralService.calculateTier(req.user!.userId);
     res.json({ ...stats, tier: tierInfo });
   } catch (err) {
     console.error('Referral stats error:', err);
@@ -42,9 +44,9 @@ router.get('/stats', (req, res) => {
 
 // ── GET /api/referrals/code ──────────────────────────────────────────────────
 
-router.get('/code', (req, res) => {
+router.get('/code', async (req, res) => {
   try {
-    const user = users.get(req.user!.userId);
+    const [user] = await db.select().from(users).where(eq(users.id, req.user!.userId));
     if (!user) {
       res.status(404).json({ error: 'User not found' });
       return;

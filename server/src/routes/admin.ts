@@ -2,17 +2,13 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { authenticate } from '../middleware/auth.js';
 import { adminGuard } from '../middleware/adminGuard.js';
-import {
-  users,
-  auditLog,
-  systemConfig,
-  ledgerEntries,
-  withdrawals,
-  generateId,
-} from '../models/store.js';
-import * as ledger from '../services/ledger.js';
+import { db } from '../db/index.js';
+import { users, auditLogs, systemConfig, ledger, withdrawals } from '../db/schema.js';
+import { eq, desc, sql } from 'drizzle-orm';
+import { generateId } from '../models/store.js';
+import * as ledgerService from '../services/ledger.js';
 import { sanitizeUser } from '../utils/index.js';
-import type { AuditLogEntry } from '../types/index.js';
+import type { User } from '../types/index.js';
 
 const router = Router();
 
@@ -21,19 +17,22 @@ router.use(authenticate, adminGuard);
 
 // ── GET /api/admin/users ─────────────────────────────────────────────────────
 
-router.get('/users', (req, res) => {
+router.get('/users', async (req, res) => {
   try {
     const page = Math.max(1, parseInt(req.query.page as string) || 1);
     const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string) || 20));
     const offset = (page - 1) * limit;
 
-    const allUsers = Array.from(users.values());
-    const paginatedUsers = allUsers.slice(offset, offset + limit);
+    const allUsers = await db.select().from(users);
+    const paginatedUsers = await db.select().from(users).offset(offset).limit(limit);
 
-    const usersWithBalances = paginatedUsers.map((u) => ({
-      ...sanitizeUser(u),
-      balance: ledger.getBalance(u.id),
-    }));
+    const usersWithBalances = [];
+    for (const u of paginatedUsers) {
+      usersWithBalances.push({
+        ...sanitizeUser(u as User),
+        balance: await ledgerService.getBalance(u.id)
+      });
+    }
 
     res.json({
       users: usersWithBalances,
@@ -57,7 +56,7 @@ const banSchema = z.object({
   status: z.enum(['SUSPENDED', 'BANNED']),
 });
 
-router.post('/users/:id/ban', (req, res) => {
+router.post('/users/:id/ban', async (req, res) => {
   try {
     // Self-action guard
     if (req.user!.userId === req.params.id) {
@@ -72,18 +71,21 @@ router.post('/users/:id/ban', (req, res) => {
     }
 
     const { reason, status } = parsed.data;
-    const targetUser = users.get(req.params.id);
+    const [targetUser] = await db.select().from(users).where(eq(users.id, req.params.id));
     if (!targetUser) {
       res.status(404).json({ error: 'User not found' });
       return;
     }
 
     const previousStatus = targetUser.status;
-    targetUser.status = status;
-    targetUser.updatedAt = new Date();
+
+    const [updatedUser] = await db.update(users)
+      .set({ status, updatedAt: new Date() })
+      .where(eq(users.id, targetUser.id))
+      .returning();
 
     // Audit log
-    const auditEntry: AuditLogEntry = {
+    await db.insert(auditLogs).values({
       id: generateId(),
       adminId: req.user!.userId,
       action: status === 'BANNED' ? 'USER_BANNED' : 'USER_SUSPENDED',
@@ -91,12 +93,11 @@ router.post('/users/:id/ban', (req, res) => {
       reason,
       details: { previousStatus, newStatus: status },
       createdAt: new Date(),
-    };
-    auditLog.push(auditEntry);
+    });
 
     res.json({
       message: `User ${status.toLowerCase()} successfully`,
-      user: sanitizeUser(targetUser),
+      user: sanitizeUser(updatedUser as User),
     });
   } catch (err) {
     console.error('Admin ban error:', err);
@@ -111,7 +112,7 @@ const adjustSchema = z.object({
   reason: z.string().min(1, 'Reason is required'),
 });
 
-router.post('/users/:id/adjust-balance', (req, res) => {
+router.post('/users/:id/adjust-balance', async (req, res) => {
   try {
     // Self-action guard
     if (req.user!.userId === req.params.id) {
@@ -126,25 +127,25 @@ router.post('/users/:id/adjust-balance', (req, res) => {
     }
 
     const { amount, reason } = parsed.data;
-    const targetUser = users.get(req.params.id);
+    const [targetUser] = await db.select().from(users).where(eq(users.id, req.params.id));
     if (!targetUser) {
       res.status(404).json({ error: 'User not found' });
       return;
     }
 
-    const beforeBalance = ledger.getBalance(targetUser.id);
+    const beforeBalance = await ledgerService.getBalance(targetUser.id);
 
     let entry;
     if (amount >= 0) {
-      entry = ledger.adjustBalance(targetUser.id, amount, 'ADMIN_ADJUST', null, `Admin adjustment: ${reason}`);
+      entry = await ledgerService.adjustBalance(targetUser.id, amount, 'ADMIN_ADJUST', null, `Admin adjustment: ${reason}`);
     } else {
-      entry = ledger.debitUser(targetUser.id, Math.abs(amount), 'ADMIN_ADJUST', null, `Admin adjustment: ${reason}`);
+      entry = await ledgerService.debitUser(targetUser.id, Math.abs(amount), 'ADMIN_ADJUST', null, `Admin adjustment: ${reason}`);
     }
 
-    const afterBalance = ledger.getBalance(targetUser.id);
+    const afterBalance = await ledgerService.getBalance(targetUser.id);
 
     // Audit log
-    const auditEntry: AuditLogEntry = {
+    await db.insert(auditLogs).values({
       id: generateId(),
       adminId: req.user!.userId,
       action: 'BALANCE_ADJUSTMENT',
@@ -152,8 +153,7 @@ router.post('/users/:id/adjust-balance', (req, res) => {
       reason,
       details: { amount, beforeBalance, afterBalance },
       createdAt: new Date(),
-    };
-    auditLog.push(auditEntry);
+    });
 
     res.json({
       message: 'Balance adjusted successfully',
@@ -174,23 +174,22 @@ router.post('/users/:id/adjust-balance', (req, res) => {
 
 // ── GET /api/admin/audit-log ─────────────────────────────────────────────────
 
-router.get('/audit-log', (req, res) => {
+router.get('/audit-log', async (req, res) => {
   try {
     const page = Math.max(1, parseInt(req.query.page as string) || 1);
     const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string) || 20));
     const offset = (page - 1) * limit;
 
-    // Sort by date desc
-    const sorted = [...auditLog].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
-    const entries = sorted.slice(offset, offset + limit);
+    const allLogs = await db.select().from(auditLogs);
+    const entries = await db.select().from(auditLogs).orderBy(desc(auditLogs.createdAt)).offset(offset).limit(limit);
 
     res.json({
       entries,
       pagination: {
         page,
         limit,
-        total: auditLog.length,
-        totalPages: Math.ceil(auditLog.length / limit),
+        total: allLogs.length,
+        totalPages: Math.ceil(allLogs.length / limit),
       },
     });
   } catch (err) {
@@ -201,37 +200,31 @@ router.get('/audit-log', (req, res) => {
 
 // ── GET /api/admin/analytics ─────────────────────────────────────────────────
 
-router.get('/analytics', (req, res) => {
+router.get('/analytics', async (req, res) => {
   try {
-    const totalUsers = users.size;
+    const allUsers = await db.select().from(users);
+    const totalUsers = allUsers.length;
 
-    // Total ATTN minted = sum of all CREDIT entries (VERIFICATION + REFERRAL + ADMIN_ADJUST)
+    const allLedger = await db.select().from(ledger);
     let totalATTNMinted = 0;
-    for (const entry of ledgerEntries.values()) {
+    let totalFeesCollected = 0;
+    for (const entry of allLedger) {
       if (entry.type === 'CREDIT' || entry.type === 'ADJUSTMENT') {
         totalATTNMinted += entry.amount;
       }
-    }
-
-    // Total fees collected
-    let totalFeesCollected = 0;
-    for (const entry of ledgerEntries.values()) {
       if (entry.type === 'FEE') {
         totalFeesCollected += entry.amount;
       }
     }
 
-    // Avg time to withdrawal (for completed withdrawals)
+    const allWithdrawals = await db.select().from(withdrawals).where(eq(withdrawals.status, 'COMPLETED'));
     let totalTimeMs = 0;
     let completedCount = 0;
-    for (const w of withdrawals.values()) {
-      if (w.status === 'COMPLETED') {
-        // Find the user's creation time as a proxy for "start"
-        const user = users.get(w.userId);
-        if (user) {
-          totalTimeMs += w.createdAt.getTime() - user.createdAt.getTime();
-          completedCount++;
-        }
+    for (const w of allWithdrawals) {
+      const [u] = await db.select().from(users).where(eq(users.id, w.userId));
+      if (u) {
+        totalTimeMs += w.createdAt.getTime() - u.createdAt.getTime();
+        completedCount++;
       }
     }
     const avgTimeToWithdrawal = completedCount > 0 ? Math.round(totalTimeMs / completedCount / 1000) : 0; // in seconds
@@ -258,7 +251,7 @@ const controlsSchema = z.object({
   pauseExpiresAt: z.string().datetime().nullable().optional(),
 });
 
-router.post('/controls', (req, res) => {
+router.post('/controls', async (req, res) => {
   try {
     const parsed = controlsSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -280,18 +273,26 @@ router.post('/controls', (req, res) => {
       }
     }
 
-    // Apply updates
-    if (data.feePercentage !== undefined) systemConfig.feePercentage = data.feePercentage;
-    if (data.withdrawalMinimum !== undefined) systemConfig.withdrawalMinimum = data.withdrawalMinimum;
-    if (data.emergencyPause !== undefined) systemConfig.emergencyPause = data.emergencyPause;
-    if (data.pauseReason !== undefined) systemConfig.pauseReason = data.pauseReason;
-    if (data.pauseExpiresAt !== undefined) {
-      systemConfig.pauseExpiresAt = data.pauseExpiresAt ? new Date(data.pauseExpiresAt) : null;
+    let [config] = await db.select().from(systemConfig).limit(1);
+    if (!config) {
+      [config] = await db.insert(systemConfig).values({}).returning();
     }
-    systemConfig.updatedAt = new Date();
+    if (!config) throw new Error('Failed to create system config');
+
+    const updates: any = {};
+    if (data.feePercentage !== undefined) updates.feePercentage = data.feePercentage;
+    if (data.withdrawalMinimum !== undefined) updates.withdrawalMinimum = data.withdrawalMinimum;
+    if (data.emergencyPause !== undefined) updates.emergencyPause = data.emergencyPause;
+    if (data.pauseReason !== undefined) updates.pauseReason = data.pauseReason;
+    if (data.pauseExpiresAt !== undefined) {
+      updates.pauseExpiresAt = data.pauseExpiresAt ? new Date(data.pauseExpiresAt) : null;
+    }
+    updates.updatedAt = new Date();
+
+    const [updatedConfig] = await db.update(systemConfig).set(updates).where(eq(systemConfig.id, config.id)).returning();
 
     // Audit log
-    const auditEntry: AuditLogEntry = {
+    await db.insert(auditLogs).values({
       id: generateId(),
       adminId: req.user!.userId,
       action: 'SYSTEM_CONFIG_UPDATE',
@@ -299,10 +300,9 @@ router.post('/controls', (req, res) => {
       reason: data.emergencyPause ? (data.pauseReason || 'System control update') : 'System control update',
       details: { ...data },
       createdAt: new Date(),
-    };
-    auditLog.push(auditEntry);
+    });
 
-    res.json({ config: systemConfig });
+    res.json({ config: updatedConfig });
   } catch (err) {
     console.error('Admin controls error:', err);
     res.status(500).json({ error: 'Internal server error' });
@@ -311,8 +311,12 @@ router.post('/controls', (req, res) => {
 
 // ── GET /api/admin/controls ──────────────────────────────────────────────────
 
-router.get('/controls', (_req, res) => {
-  res.json({ config: systemConfig });
+router.get('/controls', async (_req, res) => {
+  let [config] = await db.select().from(systemConfig).limit(1);
+  if (!config) {
+    [config] = await db.insert(systemConfig).values({}).returning();
+  }
+  res.json({ config });
 });
 
 export default router;

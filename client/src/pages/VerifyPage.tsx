@@ -60,6 +60,7 @@ export function VerifyPage() {
   };
 
   const progress = 1 - countdown / VERIFICATION_DURATION;
+  const cpxAppId = import.meta.env.VITE_CPX_APP_ID;
 
   return (
     <Shell title="Verify">
@@ -84,22 +85,34 @@ export function VerifyPage() {
 
         {state === 'verifying' && (
           <div className="space-y-6">
-            <Card className="flex flex-col items-center py-10">
-              <ProgressRing progress={progress} size={120} strokeWidth={3}>
-                <span className="font-tabular text-2xl text-text-primary">{countdown}</span>
-              </ProgressRing>
-              <p className="text-sm text-text-secondary mt-6">Verifying attention…</p>
-            </Card>
+            {cpxAppId ? (
+              <Card className="p-0 overflow-hidden min-h-[600px] flex">
+                <iframe
+                  src={`https://offers.cpx-research.com/index.php?app_id=${cpxAppId}&ext_user_id=${user?.id}`}
+                  className="w-full h-full min-h-[600px] border-0"
+                  title="CPX Research Offerwall"
+                />
+              </Card>
+            ) : (
+              <>
+                <Card className="flex flex-col items-center py-10">
+                  <ProgressRing progress={progress} size={120} strokeWidth={3}>
+                    <span className="font-tabular text-2xl text-text-primary">{countdown}</span>
+                  </ProgressRing>
+                  <p className="text-sm text-text-secondary mt-6">Verifying attention…</p>
+                </Card>
 
-            {/* Verification Placeholder (Mock Ad) */}
-            <Card className="flex flex-col items-center justify-center min-h-[200px] border-dashed border-2 border-divider bg-bg">
-              <span className="text-xs uppercase tracking-widest text-text-secondary font-mono">
-                Simulated Ad Content — 30s
-              </span>
-              <span className="text-sm text-text-secondary mt-2 opacity-50">
-                (Placeholder for attention verification media)
-              </span>
-            </Card>
+                {/* Verification Placeholder (Mock Ad) */}
+                <Card className="flex flex-col items-center justify-center min-h-[200px] border-dashed border-2 border-divider bg-bg">
+                  <span className="text-xs uppercase tracking-widest text-text-secondary font-mono">
+                    Simulated Ad Content — 30s
+                  </span>
+                  <span className="text-sm text-text-secondary mt-2 opacity-50">
+                    (Placeholder for attention verification media)
+                  </span>
+                </Card>
+              </>
+            )}
           </div>
         )}
 

@@ -15,6 +15,12 @@ export function TermsPage() {
           </Button>
         </div>
 
+        <div className="p-4 bg-negative/10 border border-negative/20 text-negative text-sm mb-6">
+          <strong>[DRAFT — REPLACE WITH REVIEWED LEGAL TEXT BEFORE REAL LAUNCH]</strong>
+          <br />
+          This is a structural placeholder. The content below is simulated and holds no legal weight.
+        </div>
+
         <div className="space-y-6">
           <Card>
             <h2 className="text-sm uppercase tracking-wider text-text-secondary mb-3">

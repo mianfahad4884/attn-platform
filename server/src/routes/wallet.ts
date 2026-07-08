@@ -12,9 +12,9 @@ router.use(authenticate);
 
 // ── GET /api/wallet/balance ──────────────────────────────────────────────────
 
-router.get('/balance', (req, res) => {
+router.get('/balance', async (req, res) => {
   try {
-    const balance = ledger.getBalance(req.user!.userId);
+    const balance = await ledger.getBalance(req.user!.userId);
     res.json({
       balance,
       formatted: formatATTN(balance),
@@ -27,13 +27,13 @@ router.get('/balance', (req, res) => {
 
 // ── GET /api/wallet/ledger ───────────────────────────────────────────────────
 
-router.get('/ledger', (req, res) => {
+router.get('/ledger', async (req, res) => {
   try {
     const page = Math.max(1, parseInt(req.query.page as string) || 1);
     const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string) || 20));
     const offset = (page - 1) * limit;
 
-    const allEntries = ledger.getUserLedger(req.user!.userId);
+    const allEntries = await ledger.getUserLedger(req.user!.userId);
     const entries = allEntries.slice(offset, offset + limit);
 
     res.json({
@@ -58,7 +58,7 @@ const withdrawSchema = z.object({
   method: z.enum(['STRIPE', 'CRYPTO']),
 });
 
-router.post('/withdraw', (req, res) => {
+router.post('/withdraw', async (req, res) => {
   try {
     const parsed = withdrawSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -67,7 +67,7 @@ router.post('/withdraw', (req, res) => {
     }
 
     const { amount, method } = parsed.data;
-    const withdrawal = payoutService.requestWithdrawal(req.user!.userId, amount, method);
+    const withdrawal = await payoutService.requestWithdrawal(req.user!.userId, amount, method);
     res.status(201).json({ withdrawal });
   } catch (err) {
     const message = (err as Error).message;
@@ -89,9 +89,9 @@ router.post('/withdraw', (req, res) => {
 
 // ── GET /api/wallet/withdrawals ──────────────────────────────────────────────
 
-router.get('/withdrawals', (req, res) => {
+router.get('/withdrawals', async (req, res) => {
   try {
-    const history = payoutService.getWithdrawals(req.user!.userId);
+    const history = await payoutService.getWithdrawals(req.user!.userId);
     res.json({ withdrawals: history });
   } catch (err) {
     console.error('Withdrawals error:', err);

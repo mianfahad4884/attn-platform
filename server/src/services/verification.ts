@@ -1,11 +1,9 @@
 import { createHmac, randomUUID } from 'node:crypto';
 import type { VerificationJob } from '../types/index.js';
-import {
-  verificationJobs,
-  processedNonces,
-  users,
-  generateId,
-} from '../models/store.js';
+import { generateId } from '../models/store.js';
+import { db } from '../db/index.js';
+import { users } from '../db/schema.js';
+import { eq } from 'drizzle-orm';
 import * as ledger from './ledger.js';
 import { getTierMultiplier } from './referral.js';
 import { WEBHOOK_SECRET } from '../utils/index.js';
@@ -13,10 +11,14 @@ import { Decimal } from 'decimal.js';
 
 const BASE_REWARD = 250_000; // 25 ATTN in minor units
 
+// Simulated in-memory queue stores since schema doesn't have tables for these
+export const verificationJobs = new Map<string, VerificationJob>();
+export const processedNonces = new Set<string>();
+
 /**
  * Generate the expected HMAC-SHA256 signature for a nonce.
  */
-function signNonce(nonce: string): string {
+export function signNonce(nonce: string): string {
   return createHmac('sha256', WEBHOOK_SECRET).update(nonce).digest('hex');
 }
 
@@ -24,11 +26,11 @@ function signNonce(nonce: string): string {
  * Start a verification job for the given user.
  * Simulates BullMQ: after 2 seconds the job auto-completes and fires the internal webhook.
  */
-export function startVerification(userId: string): VerificationJob {
-  const user = users.get(userId);
+export async function startVerification(userId: string): Promise<VerificationJob> {
+  const [user] = await db.select().from(users).where(eq(users.id, userId));
   if (!user) throw new Error('User not found');
 
-  const multiplier = getTierMultiplier(userId);
+  const multiplier = await getTierMultiplier(userId);
   const netReward = new Decimal(BASE_REWARD).times(multiplier).floor().toNumber();
   const nonce = randomUUID();
 
@@ -47,12 +49,12 @@ export function startVerification(userId: string): VerificationJob {
   verificationJobs.set(job.id, job);
 
   // Simulate queue processing — auto-complete after 2 seconds
-  setTimeout(() => {
+  setTimeout(async () => {
     job.status = 'PROCESSING';
 
     // Simulate webhook callback
     const signature = signNonce(nonce);
-    const credited = processWebhook(nonce, signature);
+    const credited = await processWebhook(nonce, signature);
     if (credited) {
       job.status = 'COMPLETED';
       job.completedAt = new Date();
@@ -71,7 +73,7 @@ export function startVerification(userId: string): VerificationJob {
  * IDEMPOTENCY: if nonce was already processed, return false (no double-credit).
  * Verifies HMAC signature before crediting.
  */
-export function processWebhook(nonce: string, signature: string): boolean {
+export async function processWebhook(nonce: string, signature: string): Promise<boolean> {
   // Idempotency check
   if (processedNonces.has(nonce)) {
     return false;
@@ -97,7 +99,7 @@ export function processWebhook(nonce: string, signature: string): boolean {
   }
 
   // Credit the user
-  ledger.creditUser(
+  await ledger.creditUser(
     targetJob.userId,
     targetJob.netReward,
     'VERIFICATION',
@@ -114,6 +116,7 @@ export function processWebhook(nonce: string, signature: string): boolean {
 /**
  * Look up a verification job by ID.
  */
-export function getJobStatus(jobId: string): VerificationJob | null {
+export async function getJobStatus(jobId: string): Promise<VerificationJob | null> {
   return verificationJobs.get(jobId) ?? null;
 }
+
